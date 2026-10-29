@@ -78,6 +78,8 @@ class CoinDash extends Phaser.Scene {
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R,P');
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
     this.paused = false;
+    // The scene clock survives restart, so un-freeze it in case R was pressed while paused.
+    this.time.paused = false;
     this.pauseOverlay = this.add.container(c.width / 2, c.height / 2, [
       this.add.rectangle(0, 0, 320, 110, 0x0a1120, 0.9),
       this.add.text(0, 0, 'PAUSED\nPress P to resume',
