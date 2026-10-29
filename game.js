@@ -22,12 +22,15 @@ function saveHighScore(value) {
 class CoinDash extends Phaser.Scene {
   constructor() { super('CoinDash'); }
 
+  // Restarting passes the chosen difficulty back in, so it survives R.
+  init(data) { this.difficulty = data.difficulty || null; }
+
   create() {
     const c = COIN_DASH;
     this.score = 0;
     this.highScore = loadHighScore();
     this.finished = false;
-    this.deadline = this.time.now + c.roundSeconds * 1000;
+    this.started = false;
     this.physics.world.setBounds(0, 44, c.width, c.height - 44);
     this.add.grid(c.width / 2, c.height / 2, c.width, c.height, 40, 40,
       c.colors.background, 1, 0x24334b, 0.45);
@@ -44,8 +47,6 @@ class CoinDash extends Phaser.Scene {
       const drone = this.add.rectangle(90 + i * 270, 100, 26, 26, c.colors.drone);
       this.drones.add(drone);
       drone.body.setCollideWorldBounds(true).setBounce(1, 1);
-      const angle = (35 + i * 105) * Math.PI / 180;
-      drone.body.setVelocity(Math.cos(angle) * c.droneSpeed, Math.sin(angle) * c.droneSpeed);
     }
     // Shield power-up: a spinning star that grants a few seconds of drone immunity.
     this.shieldUntil = 0;
@@ -56,7 +57,8 @@ class CoinDash extends Phaser.Scene {
     this.physics.add.existing(this.shieldPickup);
     this.shieldPickup.body.setCircle(15);
     this.tweens.add({ targets: this.shieldPickup, angle: 360, duration: 2400, repeat: -1 });
-    this.hideShieldPickup();
+    this.shieldPickup.setVisible(false);
+    this.shieldPickup.body.enable = false;
     // Right-aligned so it stays clear of the Coins / Best / Time HUD on the left.
     this.shieldHud = this.add.text(c.width - 18, 12, '',
       { font: '18px monospace', color: '#5ab8ff' }).setOrigin(1, 0);
@@ -76,7 +78,7 @@ class CoinDash extends Phaser.Scene {
     });
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R,P');
-    this.input.keyboard.on('keydown-R', () => this.scene.restart());
+    this.input.keyboard.on('keydown-R', () => this.scene.restart({ difficulty: this.difficulty }));
     this.paused = false;
     // The scene clock survives restart, so un-freeze it in case R was pressed while paused.
     this.time.paused = false;
@@ -86,10 +88,53 @@ class CoinDash extends Phaser.Scene {
         { font: '24px monospace', color: '#ffffff', align: 'center', lineSpacing: 12 }).setOrigin(0.5)
     ]).setDepth(10).setVisible(false);
     this.input.keyboard.on('keydown-P', () => this.togglePause());
+    for (const [name, preset] of Object.entries(c.difficulties)) {
+      this.input.keyboard.on(`keydown-${preset.key}`, () => this.chooseDifficulty(name));
+    }
+    if (this.difficulty) this.startRound();
+    else this.showDifficultyMenu();
+  }
+
+  showDifficultyMenu() {
+    const c = COIN_DASH;
+    this.hud.setText(`Coins: 0        Best: ${this.highScore}        Time: ${c.roundSeconds}s`);
+    const choices = Object.values(c.difficulties)
+      .map((preset, i) => `${i + 1} ${preset.label}`).join('   ');
+    this.menu = this.add.container(c.width / 2, c.height / 2, [
+      this.add.rectangle(0, 0, 460, 150, 0x0a1120, 0.95),
+      this.add.text(0, 0, `Choose difficulty\n${choices}`,
+        { font: '24px monospace', color: '#ffffff', align: 'center', lineSpacing: 12 }
+      ).setOrigin(0.5)
+    ]);
+  }
+
+  // Number keys start the first round, or start a new round from the end screen.
+  chooseDifficulty(name) {
+    if (!this.started) {
+      this.difficulty = name;
+      this.startRound();
+    } else if (this.finished) {
+      this.scene.restart({ difficulty: name });
+    }
+  }
+
+  startRound() {
+    const c = COIN_DASH;
+    if (this.menu) this.menu.destroy();
+    this.started = true;
+    this.deadline = this.time.now + c.roundSeconds * 1000;
+    const speed = c.droneSpeed * c.difficulties[this.difficulty].droneSpeedFactor;
+    this.drones.getChildren().forEach((drone, i) => {
+      const angle = (35 + i * 105) * Math.PI / 180;
+      drone.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    });
+    // Start the shield respawn timer with the round, not while the menu is showing.
+    this.hideShieldPickup();
   }
 
   togglePause() {
-    if (this.finished) return;
+    // No round clock exists yet on the difficulty menu.
+    if (this.finished || !this.started) return;
     this.paused = !this.paused;
     if (this.paused) {
       // Remember the time left so the round clock stands still while paused.
@@ -138,7 +183,7 @@ class CoinDash extends Phaser.Scene {
   }
 
   update() {
-    if (this.finished || this.paused) return;
+    if (this.finished || this.paused || !this.started) return;
     const dx = Number(this.cursors.right.isDown || this.keys.D.isDown)
       - Number(this.cursors.left.isDown || this.keys.A.isDown);
     const dy = Number(this.cursors.down.isDown || this.keys.S.isDown)
@@ -155,7 +200,8 @@ class CoinDash extends Phaser.Scene {
 
   updateHud() {
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
-    this.hud.setText(`Coins: ${this.score}        Best: ${this.highScore}        Time: ${seconds}s`);
+    const label = COIN_DASH.difficulties[this.difficulty].label;
+    this.hud.setText(`Coins: ${this.score}      Best: ${this.highScore}      ${label.padEnd(6)}      Time: ${seconds}s`);
     return seconds;
   }
 
@@ -170,10 +216,11 @@ class CoinDash extends Phaser.Scene {
     }
     this.updateHud();
     const c = COIN_DASH;
-    this.add.rectangle(c.width / 2, c.height / 2, 460, 190, 0x0a1120, 0.95);
+    this.add.rectangle(c.width / 2, c.height / 2, 520, 230, 0x0a1120, 0.95);
     this.add.text(c.width / 2, c.height / 2,
       `${reason}\n${this.score} coins collected\n`
-        + `${isNewBest ? 'New high score!' : `Best: ${this.highScore}`}\nPress R to try again`,
+        + `${isNewBest ? 'New high score!' : `Best: ${this.highScore}`}\n`
+        + 'Press R to try again\n1 / 2 / 3 to change difficulty',
       { font: '24px monospace', color: '#ffffff', align: 'center', lineSpacing: 12 }
     ).setOrigin(0.5);
   }
